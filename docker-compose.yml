@@ -1,0 +1,14 @@
+services:
+  checkin-center:
+    build: .
+    container_name: checkin-center
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - CHECKIN_FERNET_KEY=${CHECKIN_FERNET_KEY}
+      - CHECKIN_WEB_PASSWORD=${CHECKIN_WEB_PASSWORD:-}
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro

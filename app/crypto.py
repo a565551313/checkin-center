@@ -1,10 +1,9 @@
 """凭据加解密（Fernet）与脱敏显示。
 
 密钥只从环境变量 CHECKIN_FERNET_KEY 读取；没有密钥时拒绝启动，
-避免有人在没加密的情况下把凭据写入数据库。
+避免在未加密的情况下把凭据写入数据库。
 """
 import os
-
 from cryptography.fernet import Fernet, InvalidToken
 
 
@@ -29,12 +28,22 @@ def decrypt(token: "str | None") -> "str | None":
         return None
     try:
         return get_fernet().decrypt(token.encode()).decode()
-    except InvalidToken as exc:
-        raise RuntimeError("凭据解密失败：密钥可能已更换。") from exc
+    except (InvalidToken, Exception) as exc:
+        raise RuntimeError("凭据解密失败：密钥可能已更换或数据损坏。") from exc
+
+
+def safe_decrypt(token: "str | None") -> tuple["str | None", bool]:
+    """安全解密：解密失败时不抛异常，返回 (解密后明文, 是否成功)。"""
+    if not token:
+        return None, True
+    try:
+        return decrypt(token), True
+    except Exception:
+        return None, False
 
 
 def mask_login(login: "str | None") -> str:
-    """脱敏：5***@qq.com / p***@gmail.com 风格；永远不返回原文。"""
+    """脱敏：5***@qq.com / p***@gmail.com / u***r 风格；永远不返回原文。"""
     if not login:
         return "未设置"
     login = login.strip()
