@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>签到控制中心</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>签到控制中心</h1>
+      <div class="sub">多站点自动签到 · 凭据本地加密保存</div>
+    </div>
+    <button id="btn-refresh">刷新</button>
+  </header>
+
+  <!-- 自动签到设置 -->
+  <section class="card">
+    <h2>自动签到</h2>
+    <div class="row">
+      <label class="switch"><input type="checkbox" id="set-enabled"><span class="slider"></span></label>
+      <span>每天 <input type="time" id="set-time" value="08:42"> 自动签到（北京时间）</span>
+      <button class="primary" id="btn-save-settings">保存设置</button>
+      <button id="btn-run-now">立即执行一次</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="muted small" id="next-run"></span>
+    </div>
+  </section>
+
+  <!-- 账号 -->
+  <section class="card">
+    <h2>账号管理 <span class="muted small">（有几个账号显示几张卡片）</span></h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="primary" id="btn-add">+ 添加账号</button>
+      <span style="flex:1"></span>
+      <button id="btn-manual" disabled>开始签到（<span id="sel-count">0</span>）</button>
+    </div>
+    <div class="accounts" id="accounts"></div>
+  </section>
+
+  <!-- 实时过程 -->
+  <section class="card" id="live-card" style="display:none">
+    <h2>签到过程 <span class="spin"></span></h2>
+    <div class="timeline" id="live-timeline"></div>
+    <div id="live-results"></div>
+  </section>
+
+  <!-- 历史 -->
+  <section class="card">
+    <h2>历史记录</h2>
+    <div id="runs"></div>
+  </section>
+</div>
+
+<!-- 账号表单弹窗 -->
+<div class="modal-back" id="modal">
+  <div class="modal">
+    <h3 id="modal-title">添加账号</h3>
+    <input type="hidden" id="f-id">
+    <div class="field">
+      <label>站点</label>
+      <select id="f-site">
+        <option value="jiaobenwang">脚本王</option>
+        <option value="pikaqiu">皮卡丘token商店</option>
+        <option value="ebondai">ebondai</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>备注名（可选）</label>
+      <input type="text" id="f-nick" placeholder="例如：小号">
+    </div>
+    <div class="field">
+      <label>登录账号（邮箱）</label>
+      <input type="text" id="f-login" placeholder="user@example.com">
+    </div>
+    <div class="field" id="pw-field">
+      <label>登录密码</label>
+      <input type="password" id="f-password" placeholder="新增时必填；编辑时留空表示不更换">
+    </div>
+    <div class="field" id="key-field" style="display:none">
+      <label>API Key（ebondai）</label>
+      <input type="password" id="f-apikey" placeholder="sk-...">
+      <div class="hint">编辑时留空表示不更换；密码永不回显。</div>
+    </div>
+    <div class="field">
+      <label class="row" style="gap:8px"><input type="checkbox" id="f-enabled" checked> 启用该账号</label>
+    </div>
+    <div class="foot">
+      <button id="btn-cancel">取消</button>
+      <button class="primary" id="btn-save-acct">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
