@@ -8,89 +8,178 @@
 </head>
 <body>
 <div class="wrap">
+  <!-- 顶部导航栏 -->
   <header class="top">
     <div>
-      <h1>签到控制中心</h1>
-      <div class="sub">多站点自动签到 · 凭据本地加密保存</div>
+      <div class="brand">
+        <span class="logo-icon">⚡</span>
+        <h1>签到控制中心</h1>
+        <span id="running-indicator" class="live-pill" style="display:none"><span class="pulse-dot"></span> 签到运行中</span>
+      </div>
+      <div class="sub">多站点每日自动签到 · 本地 Fernet 加密凭据 · 实时日志流</div>
     </div>
-    <button id="btn-refresh">刷新</button>
+    <div class="top-actions">
+      <button id="btn-theme" class="icon-btn" title="切换深色/浅色模式">
+        <span id="theme-icon">🌙</span>
+      </button>
+      <button id="btn-export" title="导出今日记录为 CSV">📥 导出今日</button>
+      <button id="btn-refresh" title="快捷键：R">🔄 刷新</button>
+      <button id="btn-logout" class="danger" style="display:none">退出</button>
+    </div>
   </header>
+
+  <!-- 数据总览看板 -->
+  <section class="stats-grid">
+    <div class="stat-card" id="card-stat-total">
+      <div class="stat-title">账号总览</div>
+      <div class="stat-num" id="stat-total"><div class="skeleton skeleton-num"></div></div>
+      <div class="stat-sub" id="stat-enabled-sub">已启用 — / 停用 —</div>
+    </div>
+    <div class="stat-card stat-ok" id="card-stat-success">
+      <div class="stat-title">今日成功</div>
+      <div class="stat-num" id="stat-success"><div class="skeleton skeleton-num"></div></div>
+      <div class="stat-sub">正常获得收益</div>
+    </div>
+    <div class="stat-card stat-err" id="card-stat-failed">
+      <div class="stat-title">今日失败 / 异常</div>
+      <div class="stat-num" id="stat-failed"><div class="skeleton skeleton-num"></div></div>
+      <div class="stat-sub" id="stat-retry-sub">
+        <button id="btn-quick-retry" class="small-btn danger" style="display:none">一键重试失败</button>
+      </div>
+    </div>
+    <div class="stat-card stat-wait" id="card-stat-pending">
+      <div class="stat-title">今日待签到</div>
+      <div class="stat-num" id="stat-pending"><div class="skeleton skeleton-num"></div></div>
+      <div class="stat-sub">等待定时调度</div>
+    </div>
+  </section>
 
   <!-- 自动签到设置 -->
   <section class="card">
-    <h2>自动签到</h2>
-    <div class="row">
+    <div class="card-header">
+      <h2>⏰ 自动签到调度</h2>
+      <span class="muted small" id="next-run">计算中…</span>
+    </div>
+    <div class="row" style="margin-top:8px">
       <label class="switch"><input type="checkbox" id="set-enabled"><span class="slider"></span></label>
       <span>每天 <input type="time" id="set-time" value="08:42"> 自动签到（北京时间）</span>
       <button class="primary" id="btn-save-settings">保存设置</button>
-      <button id="btn-run-now">立即执行一次</button>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <span class="muted small" id="next-run"></span>
+      <button id="btn-run-now">🚀 立即执行一次</button>
     </div>
   </section>
 
-  <!-- 账号 -->
+  <!-- 账号管理 -->
   <section class="card">
-    <h2>账号管理 <span class="muted small">（有几个账号显示几张卡片）</span></h2>
-    <div class="row" style="margin-bottom:12px">
+    <div class="card-header">
+      <h2>👤 账号管理</h2>
       <button class="primary" id="btn-add">+ 添加账号</button>
-      <span style="flex:1"></span>
-      <button id="btn-manual" disabled>开始签到（<span id="sel-count">0</span>）</button>
     </div>
-    <div class="accounts" id="accounts"></div>
+
+    <!-- 筛选、搜索与批量操作栏 -->
+    <div class="toolbar">
+      <div class="search-box">
+        <input type="text" id="acct-search" placeholder="🔍 搜索备注或脱敏账号 (快捷键 /)">
+      </div>
+      <select id="acct-site-filter">
+        <option value="">全部站点</option>
+      </select>
+      <select id="acct-sort">
+        <option value="default">默认排序</option>
+        <option value="status">状态优先（未签/失败在前）</option>
+        <option value="streak">连签天数倒序</option>
+        <option value="site">按站点归类</option>
+      </select>
+      <div class="btn-group">
+        <button id="btn-select-all" class="text-btn">全选</button>
+        <button id="btn-deselect-all" class="text-btn">取消</button>
+        <button id="btn-batch-enable" class="text-btn batch-btn" disabled>批量启用</button>
+        <button id="btn-batch-disable" class="text-btn batch-btn" disabled>批量停用</button>
+      </div>
+      <span style="flex:1"></span>
+      <button id="btn-manual" class="primary" disabled>开始签到（<span id="sel-count">0</span>）</button>
+    </div>
+
+    <div class="accounts" id="accounts">
+      <!-- 骨架占位 -->
+      <div class="skeleton-card"></div>
+      <div class="skeleton-card"></div>
+      <div class="skeleton-card"></div>
+    </div>
   </section>
 
-  <!-- 实时过程 -->
+  <!-- 实时过程流 -->
   <section class="card" id="live-card" style="display:none">
-    <h2>签到过程 <span class="spin"></span></h2>
+    <div class="card-header">
+      <h2><span class="pulse-dot active"></span> 实时签到过程</h2>
+      <div class="row">
+        <button id="btn-copy-live-log" class="small-btn">📋 复制日志</button>
+        <button id="btn-cancel-run" class="danger">⏹ 终止运行</button>
+      </div>
+    </div>
     <div class="timeline" id="live-timeline"></div>
     <div id="live-results"></div>
   </section>
 
-  <!-- 历史 -->
+  <!-- 历史记录 -->
   <section class="card">
-    <h2>历史记录</h2>
+    <div class="card-header">
+      <h2>📜 历史运行记录</h2>
+      <div class="row" style="gap:6px">
+        <select id="history-filter-status" style="padding:4px 8px; font-size:13px">
+          <option value="">全部状态</option>
+          <option value="completed">已完成</option>
+          <option value="failed">失败</option>
+          <option value="cancelled">已终止</option>
+        </select>
+      </div>
+    </div>
     <div id="runs"></div>
+    <div class="pagination" id="runs-pagination">
+      <button id="btn-prev-page" disabled>上一页</button>
+      <span class="muted small" id="page-info">第 1 页</span>
+      <button id="btn-next-page" disabled>下一页</button>
+    </div>
   </section>
 </div>
 
-<!-- 账号表单弹窗 -->
+<!-- 动态账号表单弹窗 -->
 <div class="modal-back" id="modal">
   <div class="modal">
     <h3 id="modal-title">添加账号</h3>
     <input type="hidden" id="f-id">
     <div class="field">
       <label>站点</label>
-      <select id="f-site">
-        <option value="jiaobenwang">脚本王</option>
-        <option value="pikaqiu">皮卡丘token商店</option>
-        <option value="ebondai">ebondai</option>
-      </select>
+      <select id="f-site"></select>
     </div>
     <div class="field">
       <label>备注名（可选）</label>
-      <input type="text" id="f-nick" placeholder="例如：小号">
+      <input type="text" id="f-nick" placeholder="例如：主号 / 小号">
     </div>
+
+    <!-- 动态表单字段容器 -->
+    <div id="dynamic-fields"></div>
+
     <div class="field">
-      <label>登录账号（邮箱）</label>
-      <input type="text" id="f-login" placeholder="user@example.com">
-    </div>
-    <div class="field" id="pw-field">
-      <label>登录密码</label>
-      <input type="password" id="f-password" placeholder="新增时必填；编辑时留空表示不更换">
-    </div>
-    <div class="field" id="key-field" style="display:none">
-      <label>API Key（ebondai）</label>
-      <input type="password" id="f-apikey" placeholder="sk-...">
-      <div class="hint">编辑时留空表示不更换；密码永不回显。</div>
-    </div>
-    <div class="field">
-      <label class="row" style="gap:8px"><input type="checkbox" id="f-enabled" checked> 启用该账号</label>
+      <label class="row" style="gap:8px; cursor:pointer"><input type="checkbox" id="f-enabled" checked> 启用该账号参与自动签到</label>
     </div>
     <div class="foot">
-      <button id="btn-cancel">取消</button>
-      <button class="primary" id="btn-save-acct">保存</button>
+      <button id="btn-cancel">取消 (Esc)</button>
+      <button class="primary" id="btn-save-acct">保存账号 (Enter)</button>
+    </div>
+  </div>
+</div>
+
+<!-- 密码鉴权登录弹窗 -->
+<div class="modal-back" id="auth-modal">
+  <div class="modal" style="width:360px">
+    <h3>🔒 登录控制面板</h3>
+    <p class="muted small" style="margin-bottom:14px">此控制台启用了访问密码保护，请输入密码继续。</p>
+    <div class="field">
+      <label>控制台访问密码</label>
+      <input type="password" id="auth-password" placeholder="请输入密码" autocomplete="current-password">
+    </div>
+    <div class="foot">
+      <button class="primary" id="btn-auth-login" style="width:100%">确认登录</button>
     </div>
   </div>
 </div>
