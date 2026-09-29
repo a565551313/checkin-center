@@ -80,9 +80,13 @@
       <div class="search-box">
         <input type="text" id="acct-search" placeholder="🔍 搜索备注或脱敏账号 (快捷键 /)">
       </div>
-      <select id="acct-site-filter">
-        <option value="">全部站点</option>
-      </select>
+      <!-- 站点分页：左右翻页 + 站点快捷定位 -->
+      <div class="site-pager" id="site-pager">
+        <button id="btn-site-prev" class="page-btn" title="上一个站点">◀</button>
+        <div class="site-quick-btns" id="site-quick-btns"></div>
+        <button id="btn-site-next" class="page-btn" title="下一个站点">▶</button>
+        <span class="muted small" id="site-page-info"></span>
+      </div>
       <select id="acct-sort">
         <option value="default">默认排序</option>
         <option value="status">状态优先（未签/失败在前）</option>
@@ -104,6 +108,13 @@
       <div class="skeleton-card"></div>
       <div class="skeleton-card"></div>
       <div class="skeleton-card"></div>
+    </div>
+    <!-- 账号内分页：同一站点账号超过 5 个时出现 -->
+    <div class="pagination" id="acct-pagination" style="display:none">
+      <button id="btn-acct-prev">上一页</button>
+      <span class="muted small" id="acct-page-info"></span>
+      <select id="acct-page-jump" title="快速跳转到第几页"></select>
+      <button id="btn-acct-next">下一页</button>
     </div>
   </section>
 

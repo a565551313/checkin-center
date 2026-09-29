@@ -11,6 +11,18 @@ let historyPage = 1;
 const historyPageSize = 10;
 let historyTotal = 0;
 let lastLiveSteps = [];
+let watchSource = null;
+
+/* ---------- 站点分页状态 ---------- */
+let sitePages = [];        // 按 sitesMeta 顺序、有账号的 siteKey 列表（已应用搜索过滤）
+let siteIdx = 0;           // 当前站点页下标
+let acctPageBySite = {};   // siteKey -> 账号内页码（从 1 开始）
+const ACCT_PAGE_SIZE = 5;
+
+function currentSiteKey() {
+  if (!sitePages.length) return null;
+  return sitePages[Math.min(siteIdx, sitePages.length - 1)];
+}
 
 function toast(msg) {
   const t = $("#toast");
@@ -122,11 +134,6 @@ async function loadSites() {
   try {
     const data = await api("/api/sites");
     sitesMeta = data.sites || [];
-    
-    // 渲染站点筛选下拉菜单
-    const filter = $("#acct-site-filter");
-    filter.innerHTML = '<option value="">全部站点</option>' +
-      sitesMeta.map((s) => `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join("");
 
     // 渲染表单站点下拉菜单
     const formSite = $("#f-site");
@@ -198,23 +205,71 @@ function todayBadge(t, decryptError) {
   return `<span class="badge err">今日失败</span>`;
 }
 
+function matchKeyword(a, keyword) {
+  if (!keyword) return true;
+  const matchNick = (a.nickname || "").toLowerCase().includes(keyword);
+  const matchLabel = (a.accountLabel || "").toLowerCase().includes(keyword);
+  const matchSite = (a.siteName || "").toLowerCase().includes(keyword);
+  return matchNick || matchLabel || matchSite;
+}
+
+function accountCard(a) {
+  const t = a.today;
+  const metric = t && t.metric_label
+    ? `<span>${esc(t.metric_label)} <b>${esc(t.metric_value ?? "—")}</b></span>` : "";
+  const streak = t && t.streak_days != null
+    ? `<span>连签 <b>${t.streak_days}</b> 天</span>` : "";
+  return `
+  <div class="acct ${a.enabled ? "" : "disabled"}" data-id="${a.id}">
+    <div class="row" style="justify-content:space-between">
+      <span class="site">${esc(a.siteName)}</span>
+      <input type="checkbox" class="pick" data-id="${a.id}" ${a.enabled ? "" : "disabled"} title="勾选后批量操作">
+    </div>
+    <div class="label" data-act="copy-label" title="点击复制账号标识">
+      ${esc(a.nickname || a.accountLabel)}
+      <span class="copy-tip">📋</span>
+    </div>
+    ${a.nickname ? `<div class="nick">${esc(a.accountLabel)}</div>` : ""}
+    <div class="today">${todayBadge(t, a.decryptError)}${t && t.conclusion ? ` <span class="muted">${esc(t.conclusion)}</span>` : ""}</div>
+    <div class="metrics">${metric}${streak}
+      ${a.credentialConfigured ? "" : `<span class="badge err">凭据需配置</span>`}
+      ${a.enabled ? "" : `<span class="badge off">已停用</span>`}
+    </div>
+    <div class="actions">
+      <button data-act="single-run" class="btn-single-checkin" ${a.enabled ? "" : "disabled"} title="单独签到该账号">⚡ 签到</button>
+      <button data-act="edit">编辑</button>
+      <button data-act="toggle">${a.enabled ? "停用" : "启用"}</button>
+      <button data-act="del" class="danger">删除</button>
+    </div>
+  </div>`;
+}
+
+function renderSitePager() {
+  const box = $("#site-quick-btns");
+  box.innerHTML = sitePages
+    .map((k, i) => `<button class="site-btn${i === siteIdx ? " active" : ""}" data-site-idx="${i}">${esc(siteName(k))}</button>`)
+    .join("");
+  box.querySelectorAll(".site-btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      siteIdx = parseInt(b.dataset.siteIdx, 10) || 0;
+      renderAccounts(allAccounts);
+    })
+  );
+  $("#btn-site-prev").disabled = siteIdx <= 0;
+  $("#btn-site-next").disabled = siteIdx >= sitePages.length - 1;
+  const sk = currentSiteKey();
+  $("#site-page-info").textContent = sk
+    ? `${siteName(sk)} · 第 ${siteIdx + 1} / ${sitePages.length} 站`
+    : "";
+}
+
 function renderAccounts(accounts) {
   const box = $("#accounts");
   allAccounts = accounts || [];
   const keyword = ($("#acct-search").value || "").trim().toLowerCase();
-  const siteFilter = $("#acct-site-filter").value;
   const sortBy = $("#acct-sort").value;
 
-  let filtered = allAccounts.filter((a) => {
-    if (siteFilter && a.siteKey !== siteFilter) return false;
-    if (keyword) {
-      const matchNick = (a.nickname || "").toLowerCase().includes(keyword);
-      const matchLabel = (a.accountLabel || "").toLowerCase().includes(keyword);
-      const matchSite = (a.siteName || "").toLowerCase().includes(keyword);
-      if (!matchNick && !matchLabel && !matchSite) return false;
-    }
-    return true;
-  });
+  let filtered = allAccounts.filter((a) => matchKeyword(a, keyword));
 
   // 排序
   if (sortBy === "status") {
@@ -237,44 +292,49 @@ function renderAccounts(accounts) {
     filtered.sort((a, b) => (a.siteKey || "").localeCompare(b.siteKey || ""));
   }
 
-  if (!filtered.length) {
+  // 按站点分组：同站点账号归为同一页，站点顺序跟随 sitesMeta
+  const order = sitesMeta.map((s) => s.key);
+  const groups = new Map();
+  filtered.forEach((a) => {
+    if (!groups.has(a.siteKey)) groups.set(a.siteKey, []);
+    groups.get(a.siteKey).push(a);
+  });
+  sitePages = [...groups.keys()].sort((x, y) => {
+    const ix = order.indexOf(x), iy = order.indexOf(y);
+    return (ix === -1 ? 999 : ix) - (iy === -1 ? 999 : iy);
+  });
+  if (siteIdx >= sitePages.length) siteIdx = 0;
+  renderSitePager();
+
+  const sk = currentSiteKey();
+  const pager = $("#acct-pagination");
+  if (!sk) {
     box.innerHTML = `<div class="muted" style="grid-column:1/-1; padding:30px; text-align:center">没有找到符合条件的账号。</div>`;
+    pager.style.display = "none";
     updateSelCount();
     return;
   }
 
-  box.innerHTML = filtered
-    .map((a) => {
-      const t = a.today;
-      const metric = t && t.metric_label
-        ? `<span>${esc(t.metric_label)} <b>${esc(t.metric_value ?? "—")}</b></span>` : "";
-      const streak = t && t.streak_days != null
-        ? `<span>连签 <b>${t.streak_days}</b> 天</span>` : "";
-      return `
-      <div class="acct ${a.enabled ? "" : "disabled"}" data-id="${a.id}">
-        <div class="row" style="justify-content:space-between">
-          <span class="site">${esc(a.siteName)}</span>
-          <input type="checkbox" class="pick" data-id="${a.id}" ${a.enabled ? "" : "disabled"} title="勾选后批量操作">
-        </div>
-        <div class="label" data-act="copy-label" title="点击复制账号标识">
-          ${esc(a.nickname || a.accountLabel)}
-          <span class="copy-tip">📋</span>
-        </div>
-        ${a.nickname ? `<div class="nick">${esc(a.accountLabel)}</div>` : ""}
-        <div class="today">${todayBadge(t, a.decryptError)}${t && t.conclusion ? ` <span class="muted">${esc(t.conclusion)}</span>` : ""}</div>
-        <div class="metrics">${metric}${streak}
-          ${a.credentialConfigured ? "" : `<span class="badge err">凭据需配置</span>`}
-          ${a.enabled ? "" : `<span class="badge off">已停用</span>`}
-        </div>
-        <div class="actions">
-          <button data-act="single-run" class="btn-single-checkin" ${a.enabled ? "" : "disabled"} title="单独签到该账号">⚡ 签到</button>
-          <button data-act="edit">编辑</button>
-          <button data-act="toggle">${a.enabled ? "停用" : "启用"}</button>
-          <button data-act="del" class="danger">删除</button>
-        </div>
-      </div>`;
-    })
-    .join("");
+  // 同一站点内分页：每页最多 5 个账号
+  const siteAccts = groups.get(sk);
+  const totalPages = Math.max(1, Math.ceil(siteAccts.length / ACCT_PAGE_SIZE));
+  let pg = Math.min(Math.max(acctPageBySite[sk] || 1, 1), totalPages);
+  acctPageBySite[sk] = pg;
+  const pageAccts = siteAccts.slice((pg - 1) * ACCT_PAGE_SIZE, pg * ACCT_PAGE_SIZE);
+
+  box.innerHTML = pageAccts.map(accountCard).join("");
+
+  if (totalPages > 1) {
+    pager.style.display = "";
+    $("#acct-page-info").textContent = `第 ${pg} / ${totalPages} 页（共 ${siteAccts.length} 个账号）`;
+    $("#acct-page-jump").innerHTML = Array.from({ length: totalPages }, (_, i) =>
+      `<option value="${i + 1}"${i + 1 === pg ? " selected" : ""}>第 ${i + 1} 页</option>`
+    ).join("");
+    $("#btn-acct-prev").disabled = pg <= 1;
+    $("#btn-acct-next").disabled = pg >= totalPages;
+  } else {
+    pager.style.display = "none";
+  }
 
   updateSelCount();
 }
@@ -506,7 +566,8 @@ async function load() {
 function openModal(title, acct) {
   editingId = acct ? acct.id : null;
   $("#modal-title").textContent = title;
-  const siteKey = acct ? acct.siteKey : (sitesMeta[0] ? sitesMeta[0].key : "jiaobenwang");
+  // 新增账号默认归属当前所在的站点页
+  const siteKey = acct ? acct.siteKey : (currentSiteKey() || (sitesMeta[0] ? sitesMeta[0].key : "jiaobenwang"));
   $("#f-site").value = siteKey;
   $("#f-site").disabled = !!acct;
   $("#f-nick").value = acct ? (acct.nickname || "") : "";
@@ -520,6 +581,31 @@ function openModal(title, acct) {
 function closeModal() {
   $("#modal").classList.remove("show");
   editingId = null;
+}
+
+/* ---------- watchRuns：订阅新运行启动事件 ---------- */
+function watchNewRuns() {
+  try {
+    if (watchSource) watchSource.close();
+    watchSource = new EventSource("/api/runs/watch");
+    watchSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        // 收到新 runId（尤其定时任务触发的 scheduled 运行）后自动接入该 run 的实时流；
+        // 若已在跟随同一运行则跳过，避免重复订阅
+        if (data.type === "run" && data.runId && data.runId !== activeRunId) {
+          toast("检测到新的签到运行，正在接入实时进度…");
+          followRunSSE(data.runId);
+        }
+      } catch (err) {
+        console.error("解析 watchRuns 消息错误", err);
+      }
+    };
+    // EventSource 断线会自动重连，这里保持静默
+    watchSource.onerror = () => {};
+  } catch (e) {
+    console.warn("watchRuns 订阅失败", e);
+  }
 }
 
 /* ---------- SSE 实时日志流 ---------- */
@@ -712,8 +798,42 @@ $("#btn-batch-enable").addEventListener("click", () => batchToggleAccounts(true)
 $("#btn-batch-disable").addEventListener("click", () => batchToggleAccounts(false));
 
 $("#acct-search").addEventListener("input", debounce(() => renderAccounts(allAccounts), 150));
-$("#acct-site-filter").addEventListener("change", () => renderAccounts(allAccounts));
 $("#acct-sort").addEventListener("change", () => renderAccounts(allAccounts));
+
+/* ---------- 站点分页与账号内分页 ---------- */
+$("#btn-site-prev").addEventListener("click", () => {
+  if (siteIdx > 0) {
+    siteIdx--;
+    renderAccounts(allAccounts);
+  }
+});
+$("#btn-site-next").addEventListener("click", () => {
+  if (siteIdx < sitePages.length - 1) {
+    siteIdx++;
+    renderAccounts(allAccounts);
+  }
+});
+$("#btn-acct-prev").addEventListener("click", () => {
+  const sk = currentSiteKey();
+  if (sk && (acctPageBySite[sk] || 1) > 1) {
+    acctPageBySite[sk]--;
+    renderAccounts(allAccounts);
+  }
+});
+$("#btn-acct-next").addEventListener("click", () => {
+  const sk = currentSiteKey();
+  if (sk) {
+    acctPageBySite[sk] = (acctPageBySite[sk] || 1) + 1;
+    renderAccounts(allAccounts);
+  }
+});
+$("#acct-page-jump").addEventListener("change", (e) => {
+  const sk = currentSiteKey();
+  if (sk) {
+    acctPageBySite[sk] = parseInt(e.target.value, 10) || 1;
+    renderAccounts(allAccounts);
+  }
+});
 
 $("#history-filter-status").addEventListener("change", () => {
   historyPage = 1;
@@ -786,5 +906,7 @@ $("#btn-logout").addEventListener("click", async () => {
   await loadSites();
   if (ok) {
     load();
+    // 订阅新运行启动事件：定时任务等后台触发的 scheduled 运行也能实时接入
+    watchNewRuns();
   }
 })();

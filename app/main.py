@@ -233,6 +233,38 @@ def get_runs(limit: int = 20, offset: int = 0, status: Optional[str] = None,
     return {"runs": runs_list, "total": total, "limit": limit, "offset": offset}
 
 
+@app.get("/api/runs/watch")
+async def watch_runs():
+    """Server-Sent Events (SSE)：订阅新签到运行的启动事件。
+
+    页面打开时订阅；当有新的签到运行启动（尤其是定时任务触发的 scheduled
+    运行），即向订阅者推送新 runId，前端据此自动接入该 run 的 stream。
+    鉴权与其它 /api/ 接口一致（走统一中间件）。
+
+    注意：必须定义在 /api/runs/{run_id} 之前，否则会被路径参数路由吞掉。
+    """
+    import asyncio
+
+    async def event_generator():
+        seen = runner.get_active_run_id()
+        while True:
+            cur = runner.get_active_run_id()
+            if cur and cur != seen:
+                seen = cur
+                yield f"data: {json.dumps({'type': 'run', 'runId': cur}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/runs/{run_id}")
 def run_detail(run_id: str):
     run = db.get_run(run_id)
