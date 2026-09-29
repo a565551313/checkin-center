@@ -101,6 +101,31 @@ SITES = {
             },
         ],
     },
+    "jingdong": {
+        "name": "京东",
+        "script": "京东签到.py",
+        # 登录身份是 pt_pin（京东用户名，脱敏展示如 j***1）；
+        # password 位存 pt_key（真正的登录 Cookie 密钥，永不回显）。
+        "cred_env": {"login": "JD_PT_PIN", "password": "JD_PT_KEY"},
+        "cred_labels": {"login": "pt_pin", "password": "pt_key"},
+        "fields": [
+            {
+                "key": "login",
+                "label": "pt_pin（京东用户名）",
+                "type": "text",
+                "placeholder": "jd_ 开头的京东用户名",
+                "required": True,
+            },
+            {
+                "key": "password",
+                "label": "pt_key（登录 Cookie 密钥）",
+                "type": "password",
+                "placeholder": "新增时必填；编辑时留空不更换",
+                "required": True,
+                "hint": "与 pt_pin 配对的 Cookie，形如 pt_key=...;pt_pin=...;",
+            },
+        ],
+    },
 }
 
 # 脚本运行与重试配置

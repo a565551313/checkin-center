@@ -321,6 +321,10 @@ def _summarize(site_key: str, res: Dict[str, Any]) -> Tuple[str, str, Optional[s
         if balance is None:
             balance = res.get("balance_after")
         return ("success", conclusion, "账户余额", balance, res.get("current_streak"))
+    if site_key == "jingdong":
+        conclusion = msg or "签到成功"
+        return ("success", conclusion, "京豆", res.get("beans"),
+                res.get("current_streak"))
     # ebondai
     conclusion = msg or "签到成功"
     return ("success", conclusion, "账户余额",
