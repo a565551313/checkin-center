@@ -4,7 +4,7 @@ apscheduler>=3.10
 cryptography>=42
 tzdata>=2024.1
 requests>=2.31
-
+python-dotenv>=1.0
 # 可选：启用 Google 表格记录时才需要
 # google-api-python-client>=2.0
 # google-auth>=2.0

@@ -440,6 +440,16 @@ def toggle_account(account_id: str, body: ToggleIn):
 
 @app.delete("/api/accounts/{account_id}")
 def delete_account(account_id: str):
+    account = db.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "账号不存在")
+
+    session_path = config.SESSIONS_DIR / f"{account['id']}.session"
+    try:
+        session_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(500, "清理账号本地会话失败，账号未删除") from exc
+
     if not db.delete_account(account_id):
         raise HTTPException(404, "账号不存在")
     return {"ok": True, "message": "账号和保存的凭据已删除，历史记录已保留"}

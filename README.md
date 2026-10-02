@@ -132,7 +132,8 @@ docker compose up -d
 项目内置完整的 Pytest 自动化测试套件：
 
 ```bash
-pytest -v
+pip install -r requirements-test.txt
+python -m pytest -v
 ```
 
 ---

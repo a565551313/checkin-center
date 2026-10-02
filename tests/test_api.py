@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 os.environ["CHECKIN_FERNET_KEY"] = Fernet.generate_key().decode()
 
@@ -14,6 +15,8 @@ def setup_test_env(tmp_path, monkeypatch):
     test_db = tmp_path / "test_api.db"
     monkeypatch.setattr(config, "DB_PATH", test_db)
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSIONS_DIR", tmp_path / "sessions")
+    monkeypatch.setattr(config, "PROGRESS_DIR", tmp_path / "progress")
     monkeypatch.setattr(config, "CHECKIN_WEB_PASSWORD", "")
     config.ensure_dirs()
     db.init_db()
@@ -76,6 +79,8 @@ def test_accounts_api_flow():
         )
         assert post_res.status_code == 200
         acct_id = post_res.json()["accountId"]
+        session_path = config.SESSIONS_DIR / f"{acct_id}.session"
+        session_path.write_text("local session", encoding="utf-8")
 
         # Check in dashboard
         dash = client.get("/api/dashboard").json()
@@ -98,7 +103,38 @@ def test_accounts_api_flow():
         # Delete account
         del_res = client.delete(f"/api/accounts/{acct_id}")
         assert del_res.status_code == 200
+        assert not session_path.exists()
         assert len(client.get("/api/dashboard").json()["accounts"]) == 0
+
+
+def test_delete_account_keeps_account_when_session_cleanup_fails(monkeypatch, tmp_path):
+    with TestClient(app, raise_server_exceptions=False) as client:
+        created = client.post(
+            "/api/accounts",
+            json={
+                "siteKey": "jiaobenwang",
+                "login": "test@qq.com",
+                "password": "secretpassword",
+            },
+        )
+        acct_id = created.json()["accountId"]
+        session_path = config.SESSIONS_DIR / f"{acct_id}.session"
+        session_path.write_text("local session", encoding="utf-8")
+
+        original_unlink = Path.unlink
+
+        def fail_session_unlink(path, *args, **kwargs):
+            if path == session_path:
+                raise PermissionError("simulated permission error")
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_session_unlink)
+        response = client.delete(f"/api/accounts/{acct_id}")
+
+        assert response.status_code == 500
+        assert "会话" in response.json()["detail"]
+        assert db.get_account(acct_id) is not None
+        assert session_path.exists()
 
 
 def test_corrupted_credential_resilience():

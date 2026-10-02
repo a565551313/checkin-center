@@ -8,6 +8,7 @@
 """
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -48,15 +49,10 @@ def cancel_run(run_id: str) -> Dict[str, Any]:
         _cancel_requested = True
         proc = _current_proc
 
-    if proc and proc.poll() is None:
-        try:
-            proc.terminate()
-            # 给 1 秒缓冲，若未退出则强制 kill
-            time.sleep(1)
-            if proc.poll() is None:
-                proc.kill()
-        except OSError:
-            pass
+    if proc:
+        # The runner thread owns waiting/reaping the process. Signal its full
+        # process group here so cancellation also reaches script descendants.
+        _signal_process_tree(proc, signal.SIGTERM)
 
     return {"ok": True, "message": "已发送终止指令"}
 
@@ -159,17 +155,117 @@ def _write_cred_files(site_key: str, login: Optional[str], password: Optional[st
 
 def _build_env(site_key: str, login: Optional[str], password: Optional[str],
                api_key: Optional[str]) -> Dict[str, str]:
-    env = os.environ.copy()
+    # Keep only variables needed by Python, TLS/proxy configuration and the
+    # selected site's legacy environment-credential fallback. In particular,
+    # do not pass credentials for unrelated sites or application secrets.
+    runtime_names = {
+        "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+        "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "PYTHONUTF8", "PYTHONIOENCODING", "PYTHONUNBUFFERED",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    }
+    env = {name: value for name, value in os.environ.items() if name in runtime_names}
     mapping = config.SITES[site_key]["cred_env"]
+    for env_name in mapping.values():
+        if env_name in os.environ:
+            env[env_name] = os.environ[env_name]
     if login and "login" in mapping:
         env[mapping["login"]] = login
     if password and "password" in mapping:
         env[mapping["password"]] = password
     if api_key and "api_key" in mapping:
         env[mapping["api_key"]] = api_key
-    # 防止误读线上凭据目录
-    env.pop("CHECKIN_CRED_DIR", None)
     return env
+
+
+def _signal_process_tree(proc: subprocess.Popen, sig: Optional[int]) -> None:
+    """Send a signal to the script process group (or the direct child on Windows)."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, sig)
+        elif sig is None:
+            proc.kill()
+        elif getattr(signal, "SIGKILL", None) is not None and sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
+    except ProcessLookupError:
+        pass
+    except OSError:
+        # Preserve a best-effort direct-child fallback if group signaling fails.
+        try:
+            if proc.poll() is None:
+                force_kill = sig is None or (
+                    getattr(signal, "SIGKILL", None) is not None and sig == signal.SIGKILL
+                )
+                proc.kill() if force_kill else proc.terminate()
+        except OSError:
+            pass
+
+
+def _process_tree_exists(proc: subprocess.Popen) -> bool:
+    if os.name != "posix":
+        return proc.poll() is None
+    try:
+        os.killpg(proc.pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _terminate_process_tree(proc: subprocess.Popen, grace: float = 1.0) -> None:
+    """Terminate descendants, escalate to SIGKILL, and always reap the direct child."""
+    _signal_process_tree(proc, signal.SIGTERM)
+    deadline = time.monotonic() + max(0.0, grace)
+    while _process_tree_exists(proc) and time.monotonic() < deadline:
+        proc.poll()  # Reap the direct child promptly if it has already exited.
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+    if _process_tree_exists(proc):
+        _signal_process_tree(proc, getattr(signal, "SIGKILL", None))
+
+    # communicate() drains both output streams and reaps the direct child. A
+    # descendant that escaped the process group must not be allowed to hold the
+    # pipes open indefinitely, so bound this final drain and close our readers.
+    try:
+        proc.communicate(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        _signal_process_tree(proc, getattr(signal, "SIGKILL", None))
+        try:
+            proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+
+def _validate_script_result(result: Dict[str, Any], returncode: int) -> Dict[str, Any]:
+    """Require both a successful process exit and an explicit JSON success flag."""
+    has_success_field = "ok" in result
+    if returncode != 0:
+        result["ok"] = False
+        detail = result.get("error") or result.get("message")
+        if detail:
+            result["error"] = f"{detail}（脚本退出码 {returncode}）"
+        else:
+            result["error"] = f"签到脚本异常退出（退出码 {returncode}）"
+    elif result.get("ok") is not True:
+        result["ok"] = False
+        if not result.get("error"):
+            if has_success_field:
+                result["error"] = result.get("message") or "脚本未明确报告签到成功"
+            else:
+                result["error"] = "脚本未明确报告签到成功"
+    return result
 
 
 def _parse_script_json(stdout: str) -> Dict[str, Any]:
@@ -227,11 +323,12 @@ def _run_one_script(run_id: str, acct: Dict[str, Any], progress_path: Path,
     if not (login_ok and pwd_ok and key_ok):
         return {"ok": False, "error": "凭据解密失败（密钥可能已变更），请在账号管理中重新保存凭据"}
 
+    session_path = config.SESSIONS_DIR / f"{acct['id']}.session"
+    res: Optional[Dict[str, Any]] = None
     tmpdir = Path(tempfile.mkdtemp(prefix="checkin-cred-"))
     try:
         cred_path, key_path = _write_cred_files(site_key, login, password, api_key, tmpdir)
         env = _build_env(site_key, login, password, api_key)
-        session_path = config.SESSIONS_DIR / f"{acct['id']}.session"
         cmd = [
             sys.executable,
             str(config.SCRIPTS_DIR / site["script"]),
@@ -254,36 +351,53 @@ def _run_one_script(run_id: str, acct: Dict[str, Any], progress_path: Path,
                 stderr=subprocess.PIPE,
                 env=env,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                start_new_session=(os.name == "posix"),
             )
             with _run_lock:
                 _current_proc = proc
 
+            deadline = time.monotonic() + max(0.0, float(timeout))
             try:
-                while proc.poll() is None:
+                while True:
                     if _cancel_requested:
-                        proc.terminate()
-                        time.sleep(0.5)
-                        if proc.poll() is None:
-                            proc.kill()
+                        _terminate_process_tree(proc)
                         return {"ok": False, "error": "任务已手动终止", "cancelled": True}
+
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        _terminate_process_tree(proc)
+                        return {
+                            "ok": False,
+                            "error": f"签到脚本执行超时（{timeout} 秒）",
+                        }
+
                     _drain_progress(run_id, progress_path, state)
-                    time.sleep(0.3)
-                try:
-                    out, err = proc.communicate(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    out, err = proc.communicate()
-                    return {"ok": False, "error": "脚本执行超时"}
+                    try:
+                        out, err = proc.communicate(timeout=min(0.2, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+
+                if _cancel_requested:
+                    _terminate_process_tree(proc)
+                    return {"ok": False, "error": "任务已手动终止", "cancelled": True}
+
+                result = _parse_script_json(out)
+                if not result.get("ok") and not result.get("error") and err.strip():
+                    result["error"] = err.strip().splitlines()[-1][:300]
+                return _validate_script_result(result, proc.returncode)
             finally:
+                # Even a normally exiting script must not leave descendants
+                # behind; communicate above also detects descendants retaining
+                # inherited output pipes and routes them through timeout cleanup.
+                if proc.poll() is None or _process_tree_exists(proc):
+                    _terminate_process_tree(proc)
                 with _run_lock:
                     if _current_proc == proc:
                         _current_proc = None
                 _drain_progress(run_id, progress_path, state)
-
-            res = _parse_script_json(out)
-            if not res.get("ok") and not res.get("error") and err.strip():
-                res["error"] = err.strip().splitlines()[-1][:300]
-            return res
 
         res = _once()
         # 网络异常且未取消：退避重试一次
@@ -301,6 +415,19 @@ def _run_one_script(run_id: str, acct: Dict[str, Any], progress_path: Path,
                     res["error"] = (res.get("error") or "网络异常") + "（已重试一次）"
         return res
     finally:
+        # A concurrent account deletion can unlink the session while this
+        # script is still running. Remove any session the child writes afterward.
+        try:
+            account = db.get_account(acct["id"])
+        except Exception:  # noqa: BLE001 - do not mask the script's own result
+            account = True
+        if account is None:
+            try:
+                session_path.unlink(missing_ok=True)
+            except OSError:
+                if res is not None:
+                    res["ok"] = False
+                    res["error"] = "账号已删除，但本地会话清理失败"
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -311,6 +438,9 @@ def _summarize(site_key: str, res: Dict[str, Any]) -> Tuple[str, str, Optional[s
     err = res.get("error")
     if err:
         return ("failed", str(err)[:300], None, None, None)
+    if res.get("ok") is not True:
+        return ("failed", str(res.get("message") or "脚本未明确报告签到成功")[:300],
+                None, None, None)
     msg = res.get("message")
     if site_key == "jiaobenwang":
         conclusion = msg or "签到成功"
